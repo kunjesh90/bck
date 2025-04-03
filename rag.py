@@ -1,0 +1,138 @@
+#rag.py
+
+import pickle
+import numpy as np
+import faiss
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from langchain.embeddings import SentenceTransformerEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.docstore.in_memory import InMemoryDocstore
+from langchain.docstore.document import Document
+from langchain_together import ChatTogether
+from langchain.prompts import PromptTemplate
+import os
+import uvicorn
+from langchain_core.messages import AIMessage, HumanMessage
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
+# Initialize FastAPI app
+app = FastAPI()
+print("✅ FastAPI app initialized 🚀")
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+# Load Together.ai model
+TOGETHER_API_KEY = os.getenv("TOGETHER_API_KEY", "c51c9bcaa6bf7fae3ce684206311564828c13fa2e91553f915fee01d517ccee9")
+if not TOGETHER_API_KEY:
+    raise ValueError("❌ Together.ai API key is missing.")
+
+chat_model = ChatTogether(
+    together_api_key=TOGETHER_API_KEY,
+    model="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+)
+
+prompt_template = PromptTemplate(
+    input_variables=["context", "question"],
+    template=(
+        "You are Kunjesh Parekh whose reseume is given as context to you. Now behave like the AI avatar of Kunjesh and provide the answers from the given document.Since this is resume of Kunjesh, feel free to build on the relevant questions to answer from your knowledge but do not share any private info.Do not make responses for the facts which you do not know.\n"
+        "Context: {context}\n\n"
+        "Question: {question}\n\n"
+        "Answer:"
+    )
+)
+
+# Load the embeddings model
+embedding_model = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+print("✅ Embedding model loaded: all-MiniLM-L6-v2 🧠")
+
+# Load docstore
+try:
+    with open("docstore.pkl", "rb") as f:
+        docstore = pickle.load(f)
+    if not isinstance(docstore, InMemoryDocstore):
+        raise ValueError("❌ docstore.pkl is not an InMemoryDocstore.")
+    print("✅ Document store loaded successfully! 📚")
+    stored_ids = list(docstore._dict.keys())
+    print("📂 Stored Document IDs:", stored_ids)
+except Exception as e:
+    print(f"❌ Error loading docstore.pkl: {e}")
+    docstore = None
+
+# Load FAISS index
+try:
+    faiss_index_path = "faiss_index/index.faiss"
+    faiss_index = faiss.read_index(faiss_index_path)
+    print(f"✅ FAISS index loaded from {faiss_index_path} 📌")
+    print("📊 FAISS index size:", faiss_index.ntotal)
+except Exception as e:
+    print(f"❌ Error loading FAISS index: {e}")
+    faiss_index = None
+
+@app.get("/ask")
+async def ask_question(query: str):
+    print(f"\n🔍 New query received: {query}")
+
+    if not faiss_index:
+        raise HTTPException(status_code=500, detail="❌ FAISS index is not loaded.")
+    if not docstore:
+        raise HTTPException(status_code=500, detail="❌ Docstore is not loaded.")
+
+    # Generate embedding for the query
+    try:
+        query_embedding = embedding_model.embed_query(query)
+        print("✅ Query embedding created 🧩")
+    except Exception as e:
+        print(f"❌ Error generating query embedding: {e}")
+        raise HTTPException(status_code=500, detail="Error generating query embedding.")
+
+    # Perform FAISS search
+    try:
+        D, I = faiss_index.search(np.array([query_embedding]), k=3)
+        print(f"📌 Retrieved document IDs: {I[0]}")
+        print("📌 FAISS distances:", D)
+    except Exception as e:
+        print(f"❌ Error searching FAISS index: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving documents from FAISS index.")
+
+    # Apply distance threshold
+    threshold = 0.8
+    valid_docs = [(docstore._dict.get(int(doc_id)), distance) for doc_id, distance in zip(I[0], D[0]) if doc_id != -1]
+
+
+    if not valid_docs:
+        print("⚠️ No relevant documents found.")
+        return {"response": "No relevant information found in the knowledge base."}
+
+    # Retrieve the most relevant document
+    retrieved_docs = [doc.page_content for doc, _ in valid_docs if doc]
+    print("📄 Retrieved document content:", retrieved_docs)
+
+    if retrieved_docs:
+        context_text = "\n".join(retrieved_docs)
+        messages = [
+            HumanMessage(content=f"Context: {context_text}\nUser Query: {query}")
+        ]
+    else:
+        messages = [HumanMessage(content=f"User Query: {query}")]
+
+    try:
+        response = chat_model.invoke(messages)
+        response_text = response.content
+    except Exception as e:
+        print(f"❌ Error generating response with Together.ai: {e}")
+        raise HTTPException(status_code=500, detail="Error generating chatbot response.")
+
+    return {"response": response_text}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8001, reload=True)
