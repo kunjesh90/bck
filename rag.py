@@ -67,6 +67,9 @@ prompt_template = PromptTemplate(
     )
 )
 
+print("\n🧾 PROMPT TEMPLATE PREVIEW:\n")
+print(prompt_template)
+
 # Load the embeddings model
 embedding_model = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
 print("✅ Embedding model loaded: all-MiniLM-L6-v2 🧠")
@@ -142,7 +145,9 @@ async def ask_question(query: str):
         messages = [HumanMessage(content=f"User Query: {query}")]
 
     try:
-        response = chat_model.invoke(messages)
+        formatted_prompt = prompt_template.format(context=context_text, question=query)
+        response = chat_model.invoke([HumanMessage(content=formatted_prompt)])
+
         response_text = response.content
     except Exception as e:
         print(f"❌ Error generating response with Together.ai: {e}")
