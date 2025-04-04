@@ -1,8 +1,15 @@
-FROM python:3.9
+# Use an official Python runtime as a parent image
+FROM python:3.10
 
+# Set the working directory
 WORKDIR /app
-COPY . /app
 
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy the current directory contents into the container at /app
+COPY . .
 
-CMD ["uvicorn", "rag:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
+# Install any needed packages
+RUN pip install --upgrade pip
+RUN pip install -r requirements.txt
+
+# Command to run the application
+CMD ["uvicorn", "rag:app", "--host", "0.0.0.0", "--port", "8001"]
