@@ -15,4 +15,4 @@ sentence-transformers==3.4.1
 uvicorn>=0.22.0
 python-dotenv==1.0.1
 beautifulsoup4
-transformers==4.39.3
+
